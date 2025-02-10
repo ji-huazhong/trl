@@ -22,6 +22,7 @@ from unittest.mock import patch
 import torch
 import torch.utils.data
 import transformers
+from accelerate import PartialState
 from accelerate.utils import broadcast_object_list, gather, gather_object
 from accelerate.utils.other import is_compiled_module
 from datasets import Dataset, IterableDataset
@@ -342,10 +343,12 @@ class GRPOTrainer(Trainer):
 
             if self.accelerator.is_main_process:
                 vllm_device = self.args.vllm_device
+                device_type = PartialState().default_device.type
+                device_module = getattr(torch, device_type)
                 if vllm_device == "auto":
-                    vllm_device = f"cuda:{self.accelerator.num_processes}"  # take the next GPU idx
+                    vllm_device = f"{device_type}:{self.accelerator.num_processes}"  # take the next GPU idx
                 # Check that the requested device is available
-                if vllm_device.split(":")[0] == "cuda" and int(vllm_device.split(":")[1]) >= torch.cuda.device_count():
+                if vllm_device.split(":")[0] == f"{device_type}" and int(vllm_device.split(":")[1]) >= device_module.device_count():
                     raise ValueError(
                         f"The requested device for vllm ({vllm_device}) is not available. You are likely using vLLM "
                         "without restricting the number of GPUs for training. Set the `--num_processes` argument to a "
