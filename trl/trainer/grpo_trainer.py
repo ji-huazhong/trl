@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
+import functools
 import os
 import textwrap
 import warnings
@@ -20,6 +22,7 @@ from typing import Any, Callable, Optional, Sized, Union
 from unittest.mock import patch
 
 import torch
+import torch.distributed
 import torch.utils.data
 import transformers
 from accelerate import PartialState
@@ -369,7 +372,18 @@ class GRPOTrainer(Trainer):
                 profiling_patch = patch(
                     "vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling", return_value=None
                 )
-                with world_size_patch, profiling_patch:
+                # 
+                @contextlib.contextmanager
+                def new_group_context():
+                    original_new_group = torch.distributed.new_group
+                    try:
+                        torch.distributed.new_group = functools.partial(original_new_group, use_local_synchronization=True) 
+                        yield
+                    finally:
+                        torch.distributed.new_group = original_new_group
+
+                new_group_patch = new_group_context() if device_type == "npu" else contextlib.nullcontext()
+                with world_size_patch, profiling_patch, new_group_patch:
                     self.llm = LLM(
                         model=model.name_or_path,
                         device=vllm_device,
