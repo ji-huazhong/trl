@@ -78,28 +78,23 @@ class WeightSyncWorker(Worker):
         self.weight_update_group = None  # Communicator for weight updates
         self.client_rank = None  # Source rank for broadcasting updated weights
 
-    def init_weight_update_group(self, host: str, port: int, world_size: int, backend: str) -> None:
-        """
-        Initializes the weight update process group.
+    def init_weight_update_group(
+        self,
+        host: str,
+        port: int,
+        rank_offset: int,
+        world_size: int,
+        group_name: str,
+        backend: str) -> None:
 
-        This method creates a `StatelessProcessGroup` that allows external training processes to
-        communicate with vLLM workers without interfering with the global torch distributed group.
+        assert torch.distributed.is_initialized(), "default torch process group must be initialized"
+        assert group_name != "", "group name must not be empty"
 
-        Args:
-            host (`str`):
-                Hostname or IP address of the master node.
-            port (`int`):
-                Port number to be used for communication.
-            world_size (`int`):
-                Total number of participating processes in the update group.
-            backend (`str`):
-                The backend to use for collective communication.
-        """
         if self.weight_update_group is not None:
             raise RuntimeError("Weight update group already initialized. Call close_weight_update_group first.")
 
         # Get the rank of the current worker in the global world group.
-        rank = get_world_group().rank
+        rank =torch.distributed.get_rank() + rank_offset
 
         # Create a stateless process group to manage communication between training processes and vLLM workers.
         self.weight_update_group = init_process_group(
@@ -107,11 +102,11 @@ class WeightSyncWorker(Worker):
             init_method=f"tcp://{host}:{port}",
             world_size=world_size,
             rank=rank,
-            group_name="weight_update_group",
+            group_name=group_name,
         )
 
         # The client process that sends updated weights has the highest rank (world_size - 1).
-        self.client_rank = world_size - 1
+        self.client_rank = 0
 
     def update_named_param(self, name: str, dtype: torch.dtype, shape: Sequence[int]) -> None:
         """
@@ -354,7 +349,9 @@ def main(script_args: ScriptArguments):
     class InitWeightUpdateGroupRequest(BaseModel):
         host: str
         port: int
+        rank_offset: int
         world_size: int
+        group_name: str
         backend: str
 
 
@@ -373,7 +370,7 @@ def main(script_args: ScriptArguments):
         background_tasks.add_task(
             llm.collective_rpc,
             "init_weight_update_group",
-            args=(request.host, request.port, script_args.tensor_parallel_size + 1, request.backend),
+            args=(request.host, request.port, request.rank_offset, request.world_size, request.group_name, request.backend),
         )
         return {"message": "Request received, initializing communicator"}
 

@@ -200,12 +200,14 @@ class VLLMClient:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
         world_size = tensor_parallel_size + 1
-        self.rank = tensor_parallel_size  # The client's rank is the last process
+        self.rank = 0  # The client's rank is the last process
+        rank_offset = 1
+        group_name = "weight_update_group"
 
         # Initialize weight update group
         url = f"http://{self.host}:{self.server_port}/init_weight_update_group/"
         # In the server side, the host is set to 0.0.0.0
-        response = self.session.post(url, json={"host": "0.0.0.0", "port": self.group_port, "world_size": world_size, "backend": self.backend})
+        response = self.session.post(url, json={"host": "0.0.0.0", "port": self.group_port, "rank_offset": rank_offset, "world_size": world_size, "group_name": group_name, "backend": self.backend})
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
@@ -215,7 +217,7 @@ class VLLMClient:
             init_method=f"tcp://{self.host}:{self.group_port}",
             world_size=world_size,
             rank=self.rank,
-            group_name="weight_update_group",
+            group_name=group_name,
         )
 
     def update_named_param(self, name: str, weights: torch.Tensor):
